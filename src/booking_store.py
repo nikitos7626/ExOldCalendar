@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import json
 import threading
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+
+import mysql.connector
+from mysql.connector import pooling
 
 
 @dataclass(slots=True)
@@ -22,38 +24,76 @@ class BookingRequest:
 
 
 class BookingStore:
-    """Very small JSON storage for booking requests."""
+    """MySQL storage for booking requests."""
 
-    def __init__(self, storage_path: Path):
-        self.storage_path = storage_path
-        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, settings):
+        self._pool = None
+        self._settings = settings
+        self._init_database()
         self._lock = threading.Lock()
-        self._data: Dict[str, List[Dict]] = {"requests": []}
-        self._load()
 
-    def _load(self) -> None:
-        if self.storage_path.exists():
-            with self.storage_path.open("r", encoding="utf-8") as f:
-                self._data = json.load(f)
-        else:
-            self._flush()
+    def _get_connection(self):
+        if self._pool is None:
+            self._pool = pooling.MySQLConnectionPool(
+                pool_name="booking_pool",
+                pool_size=5,
+                host=self._settings.mysql_host,
+                port=self._settings.mysql_port,
+                user=self._settings.mysql_user,
+                password=self._settings.mysql_password,
+                database=self._settings.mysql_database,
+                autocommit=False
+            )
+        return self._pool.get_connection()
 
-    def _flush(self) -> None:
-        with self.storage_path.open("w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2)
-
-    def _filter_slot(self, date_str: str, time_str: str) -> List[Dict]:
-        return [
-            req
-            for req in self._data["requests"]
-            if req["date"] == date_str and req["time"] == time_str
-        ]
+    def _init_database(self) -> None:
+        """Create database and table if not exists."""
+        conn = mysql.connector.connect(
+            host=self._settings.mysql_host,
+            port=self._settings.mysql_port,
+            user=self._settings.mysql_user,
+            password=self._settings.mysql_password
+        )
+        cursor = conn.cursor()
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self._settings.mysql_database}")
+        cursor.execute(f"USE {self._settings.mysql_database}")
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bookings (
+                id VARCHAR(36) PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                username VARCHAR(255),
+                full_name VARCHAR(255) NOT NULL,
+                date DATE NOT NULL,
+                time TIME NOT NULL,
+                status VARCHAR(50) NOT NULL,
+                created_at DATETIME NOT NULL,
+                INDEX idx_user_id (user_id),
+                INDEX idx_date_time (date, time),
+                INDEX idx_status (status)
+            )
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
 
     def get_slot_state(self, date_str: str, time_str: str) -> Optional[str]:
-        for request in self._filter_slot(date_str, time_str):
-            if request["status"] in {"pending", "confirmed"}:
-                return request["status"]
-        return None
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT status FROM bookings 
+                WHERE date = %s AND time = %s AND status IN ('pending', 'confirmed')
+                LIMIT 1
+                """,
+                (date_str, time_str)
+            )
+            result = cursor.fetchone()
+            return result[0] if result else None
+        finally:
+            cursor.close()
+            conn.close()
 
     def create_request(
         self,
@@ -67,6 +107,7 @@ class BookingStore:
         with self._lock:
             if self.get_slot_state(date_str, time_str):
                 raise ValueError("Slot already requested or confirmed")
+            
             request = BookingRequest(
                 id=str(uuid.uuid4()),
                 user_id=user_id,
@@ -77,57 +118,142 @@ class BookingStore:
                 status="pending",
                 created_at=datetime.utcnow().isoformat(),
             )
-            self._data["requests"].append(asdict(request))
-            self._flush()
-            return request
+            
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO bookings (id, user_id, username, full_name, date, time, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        request.id,
+                        request.user_id,
+                        request.username,
+                        request.full_name,
+                        request.date,
+                        request.time,
+                        request.status,
+                        request.created_at
+                    )
+                )
+                conn.commit()
+                return request
+            finally:
+                cursor.close()
+                conn.close()
 
     def update_status(self, request_id: str, status: str) -> BookingRequest:
         with self._lock:
-            for item in self._data["requests"]:
-                if item["id"] == request_id:
-                    item["status"] = status
-                    self._flush()
-                    return BookingRequest(**item)
-        raise KeyError(f"Request {request_id} not found")
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "UPDATE bookings SET status = %s WHERE id = %s",
+                    (status, request_id)
+                )
+                conn.commit()
+                return self.get_request(request_id)
+            finally:
+                cursor.close()
+                conn.close()
 
     def get_request(self, request_id: str) -> BookingRequest:
-        for item in self._data["requests"]:
-            if item["id"] == request_id:
-                return BookingRequest(**item)
-        raise KeyError(request_id)
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM bookings WHERE id = %s", (request_id,))
+            row = cursor.fetchone()
+            if row:
+                return BookingRequest(
+                    id=row[0],
+                    user_id=row[1],
+                    username=row[2] or "",
+                    full_name=row[3],
+                    date=str(row[4]),
+                    time=str(row[5]),
+                    status=row[6],
+                    created_at=str(row[7])
+                )
+            raise KeyError(request_id)
+        finally:
+            cursor.close()
+            conn.close()
 
     def list_day_states(self, date_str: str) -> Dict[str, str]:
         """Return map time -> status for slots with any activity."""
-        result: Dict[str, str] = {}
-        for item in self._data["requests"]:
-            if item["date"] == date_str:
-                result[item["time"]] = item["status"]
-        return result
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT time, status FROM bookings WHERE date = %s",
+                (date_str,)
+            )
+            return {str(row[0]): row[1] for row in cursor.fetchall()}
+        finally:
+            cursor.close()
+            conn.close()
 
     def list_user_requests(self, user_id: int) -> List[BookingRequest]:
-        requests = [
-            BookingRequest(**item)
-            for item in self._data["requests"]
-            if item["user_id"] == user_id
-        ]
-        requests.sort(key=lambda r: (r.date, r.time))
-        return requests
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT * FROM bookings WHERE user_id = %s ORDER BY date, time",
+                (user_id,)
+            )
+            return [
+                BookingRequest(
+                    id=row[0],
+                    user_id=row[1],
+                    username=row[2] or "",
+                    full_name=row[3],
+                    date=str(row[4]),
+                    time=str(row[5]),
+                    status=row[6],
+                    created_at=str(row[7])
+                )
+                for row in cursor.fetchall()
+            ]
+        finally:
+            cursor.close()
+            conn.close()
 
     def list_all_requests(self) -> List[BookingRequest]:
-        requests = [BookingRequest(**item) for item in self._data["requests"]]
-        requests.sort(key=lambda r: (r.date, r.time))
-        return requests
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM bookings ORDER BY date, time")
+            return [
+                BookingRequest(
+                    id=row[0],
+                    user_id=row[1],
+                    username=row[2] or "",
+                    full_name=row[3],
+                    date=str(row[4]),
+                    time=str(row[5]),
+                    status=row[6],
+                    created_at=str(row[7])
+                )
+                for row in cursor.fetchall()
+            ]
+        finally:
+            cursor.close()
+            conn.close()
 
     def cleanup_expired(self, now: datetime) -> None:
         """Remove requests that finished before 'now'."""
-        now_str = now.strftime("%Y-%m-%d %H:%M")
         with self._lock:
-            before = len(self._data["requests"])
-            self._data["requests"] = [
-                item
-                for item in self._data["requests"]
-                if f"{item['date']} {item['time']}" >= now_str
-            ]
-            if len(self._data["requests"]) != before:
-                self._flush()
-
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                now_str = now.strftime("%Y-%m-%d %H:%M")
+                cursor.execute(
+                    "DELETE FROM bookings WHERE CONCAT(date, ' ', time) < %s",
+                    (now_str,)
+                )
+                conn.commit()
+            finally:
+                cursor.close()
+                conn.close()

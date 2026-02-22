@@ -39,6 +39,16 @@ class Settings:
     slot_duration_minutes: int
     booking_horizon_days: int
     storage_path: Path
+    # MySQL settings
+    mysql_host: str
+    mysql_port: int
+    mysql_user: str
+    mysql_password: str
+    mysql_database: str
+    # Flask settings
+    flask_secret_key: str
+    flask_host: str
+    flask_port: int
 
 
 def _parse_workdays(raw: str | None) -> List[int]:
@@ -90,6 +100,13 @@ def load_settings(env_file: str | None = None) -> Settings:
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    # MySQL settings
+    mysql_host = os.getenv("MYSQL_HOST", "localhost")
+    mysql_port = int(os.getenv("MYSQL_PORT", "3306"))
+    mysql_user = os.getenv("MYSQL_USER", "root")
+    mysql_password = os.getenv("MYSQL_PASSWORD", "")
+    mysql_database = os.getenv("MYSQL_DATABASE", "excalendar")
+
     return Settings(
         bot_token=bot_token,
         instructor_chat_id=int(instructor_chat_id),
@@ -100,5 +117,13 @@ def load_settings(env_file: str | None = None) -> Settings:
         slot_duration_minutes=60,
         booking_horizon_days=booking_horizon_days,
         storage_path=data_dir / "bookings.json",
+        mysql_host=mysql_host,
+        mysql_port=mysql_port,
+        mysql_user=mysql_user,
+        mysql_password=mysql_password,
+        mysql_database=mysql_database,
+        flask_secret_key=os.getenv("FLASK_SECRET_KEY", "dev-secret-key"),
+        flask_host=os.getenv("FLASK_HOST", "0.0.0.0"),
+        flask_port=int(os.getenv("FLASK_PORT", "5000")),
     )
 
