@@ -26,9 +26,32 @@ class BookingRequest:
 class BookingStore:
     """MySQL storage for booking requests."""
 
-    def __init__(self, settings):
+    def __init__(self, settings=None, **kwargs):
         self._pool = None
-        self._settings = settings
+        
+        # Support both new keyword arguments and old settings object
+        if settings is not None:
+            # Using settings object (old way)
+            self._host = settings.mysql_host
+            self._port = settings.mysql_port
+            self._user = settings.mysql_user
+            self._password = settings.mysql_password
+            self._database = settings.mysql_database
+        elif kwargs:
+            # Using keyword arguments directly (new way)
+            self._host = kwargs.get('host', 'localhost')
+            self._port = kwargs.get('port', 3306)
+            self._user = kwargs.get('user', 'root')
+            self._password = kwargs.get('password', '')
+            self._database = kwargs.get('database', 'excalendar')
+        else:
+            # Default values
+            self._host = 'localhost'
+            self._port = 3306
+            self._user = 'root'
+            self._password = ''
+            self._database = 'excalendar'
+            
         self._init_database()
         self._lock = threading.Lock()
 
@@ -37,11 +60,11 @@ class BookingStore:
             self._pool = pooling.MySQLConnectionPool(
                 pool_name="booking_pool",
                 pool_size=5,
-                host=self._settings.mysql_host,
-                port=self._settings.mysql_port,
-                user=self._settings.mysql_user,
-                password=self._settings.mysql_password,
-                database=self._settings.mysql_database,
+                host=self._host,
+                port=self._port,
+                user=self._user,
+                password=self._password,
+                database=self._database,
                 autocommit=False
             )
         return self._pool.get_connection()
@@ -49,14 +72,14 @@ class BookingStore:
     def _init_database(self) -> None:
         """Create database and table if not exists."""
         conn = mysql.connector.connect(
-            host=self._settings.mysql_host,
-            port=self._settings.mysql_port,
-            user=self._settings.mysql_user,
-            password=self._settings.mysql_password
+            host=self._host,
+            port=self._port,
+            user=self._user,
+            password=self._password
         )
         cursor = conn.cursor()
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self._settings.mysql_database}")
-        cursor.execute(f"USE {self._settings.mysql_database}")
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self._database}")
+        cursor.execute(f"USE {self._database}")
         
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS bookings (

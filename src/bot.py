@@ -34,13 +34,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 
 
 settings: Settings = load_settings()
-store = BookingStore(
-    host=settings.mysql_host,
-    port=settings.mysql_port,
-    user=settings.mysql_user,
-    password=settings.mysql_password,
-    database=settings.mysql_database
-)
+store = BookingStore(settings=settings)
 timezone = pytz.timezone(settings.timezone)
 daily_slots = []
 CLIENT_CANCELABLE_STATUSES = {"pending", "confirmed"}

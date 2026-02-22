@@ -28,7 +28,7 @@ WEEKDAY_ALIASES = {
 }
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(slots=True)
 class Settings:
     bot_token: str
     instructor_chat_id: int

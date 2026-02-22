@@ -12,13 +12,7 @@ settings = load_settings()
 app.secret_key = settings.flask_secret_key
 
 # Инициализируем хранилище
-store = BookingStore(
-    host=settings.mysql_host,
-    port=settings.mysql_port,
-    user=settings.mysql_user,
-    password=settings.mysql_password,
-    database=settings.mysql_database
-)
+store = BookingStore(settings=settings)
 
 
 @app.route('/')
