@@ -23,40 +23,42 @@ def index():
 
 @app.route('/api/slots')
 def get_slots():
-    """Получить доступные слоты"""
-    from datetime import datetime, timedelta
+    """Получить доступные слоты (слоты совпадают с ботом по slot_duration_minutes)."""
+    from datetime import datetime, timedelta, time
+    
     import pytz
     
     tz = pytz.timezone(settings.timezone)
     today = datetime.now(tz).date()
+    slot_delta = timedelta(minutes=settings.slot_duration_minutes)
     
-    # Получаем все существующие записи
     all_requests = store.list_all_requests()
     
-    # Генерируем рабочие слоты на ближайшие дни
     slots = []
     for i in range(settings.booking_horizon_days):
         current_date = today + timedelta(days=i)
         if current_date.weekday() not in settings.workdays:
             continue
-            
-        for hour in range(settings.work_start_hour, settings.work_end_hour):
-            time_str = f"{hour:02d}:00"
+
+        cursor = datetime.combine(current_date, time(hour=settings.work_start_hour))
+        end_time = time(hour=settings.work_end_hour)
+        while cursor.time() < end_time:
+            time_str = cursor.strftime("%H:%M")
             slot_status = "free"
-            
-            # Проверяем статус слота
             for req in all_requests:
                 if req.date == current_date.isoformat() and req.time == time_str:
                     if req.status in ("pending", "confirmed"):
                         slot_status = req.status
                         break
-            
             slots.append({
                 "date": current_date.isoformat(),
                 "time": time_str,
-                "status": slot_status
+                "status": slot_status,
             })
-    
+            cursor += slot_delta
+            if cursor.time() == time(0, 0):
+                break
+
     return jsonify(slots)
 
 

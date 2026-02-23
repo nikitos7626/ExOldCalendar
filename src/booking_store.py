@@ -2,13 +2,30 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import dataclass, asdict
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import mysql.connector
 from mysql.connector import pooling
+
+
+def _normalize_time(value) -> str:
+    """Convert MySQL TIME (timedelta or time) to HH:MM string."""
+    if value is None:
+        return "00:00"
+    if isinstance(value, timedelta):
+        total = int(value.total_seconds())
+        h, r = divmod(total, 3600)
+        m, _ = divmod(r, 60)
+        return f"{h:02d}:{m:02d}"
+    if hasattr(value, "strftime"):
+        return value.strftime("%H:%M")
+    s = str(value).strip()
+    if len(s) >= 5 and s[2] == ":":
+        return f"{int(s[:2]):02d}:{int(s[3:5]):02d}" if s[:2].isdigit() and s[3:5].isdigit() else s[:5]
+    return s
 
 
 @dataclass(slots=True)
@@ -195,7 +212,7 @@ class BookingStore:
                     username=row[2] or "",
                     full_name=row[3],
                     date=str(row[4]),
-                    time=str(row[5]),
+                    time=_normalize_time(row[5]),
                     status=row[6],
                     created_at=str(row[7])
                 )
@@ -213,7 +230,7 @@ class BookingStore:
                 "SELECT time, status FROM bookings WHERE date = %s",
                 (date_str,)
             )
-            return {str(row[0]): row[1] for row in cursor.fetchall()}
+            return {_normalize_time(row[0]): row[1] for row in cursor.fetchall()}
         finally:
             cursor.close()
             conn.close()
@@ -233,7 +250,7 @@ class BookingStore:
                     username=row[2] or "",
                     full_name=row[3],
                     date=str(row[4]),
-                    time=str(row[5]),
+                    time=_normalize_time(row[5]),
                     status=row[6],
                     created_at=str(row[7])
                 )
@@ -255,7 +272,7 @@ class BookingStore:
                     username=row[2] or "",
                     full_name=row[3],
                     date=str(row[4]),
-                    time=str(row[5]),
+                    time=_normalize_time(row[5]),
                     status=row[6],
                     created_at=str(row[7])
                 )
